@@ -74,7 +74,7 @@ TAMIL_STRONG_WORDS = [
     "paitiyam", "paithyam", "bejara", "kudukara", "kuduthutu", "aaprom", "appuram",
     "solren", "sollren", "ketkala", "ketkate", "vendaam", "venam", "vennum",
     "thangachi", "thambi", "polappa", "romba", "konjam", "nallaa", "seri da",
-    "sari da", "paaru", "paru", "vanthuru", "enna panra", "enna panre",
+    "sari da", "paaru", "paru", "vanthuru", "enna panra", "enna panre", "tamil ahh",
 ]
 TAMIL_WEAK_WORDS = [
     "enna", "illa", "ama", "seri", "sari", "nalla", "anna", "akka", "thala",

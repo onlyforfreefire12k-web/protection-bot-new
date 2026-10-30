@@ -122,7 +122,6 @@ GMUTE_RULES = [
 # Bio/Name/Username me in me se KOI EK word bhi mila -> seedha gmute
 BIO_BAN_PATTERNS = [
     ("free",      re.compile(r"\bfr[e3][e3]\b")),
-    ("dm",        re.compile(r"\bdms?\b")),
     ("service",   re.compile(r"\bserv[i1]c[e3]s?\b")),
     ("100%",      re.compile(r"1[o0]0\s*%|1[o0]0\s*percent")),
     ("callgirl",  re.compile(r"\bcall\s*girls?\b|\bcallgirls?\b")),

@@ -578,9 +578,11 @@ def main():
     global ME_ID, ME_USERNAME
     if not (API_ID and API_HASH and BOT_TOKEN):
         raise SystemExit("❌ API_ID, API_HASH, BOT_TOKEN env variables set karo!")
+    print(f"[debug] API_ID={API_ID} | API_HASH len={len(API_HASH)} | BOT_TOKEN len={len(BOT_TOKEN)}")
     threading.Thread(target=run_flask, daemon=True).start()
     threading.Thread(target=dirty_saver, daemon=True).start()
-    me = client.start(bot_token=BOT_TOKEN)
+    client.start(bot_token=BOT_TOKEN)
+    me = client.loop.run_until_complete(client.get_me())   # <-- FIX: yahi se bot ka id/username milta hai
     ME_ID = me.id
     ME_USERNAME = me.username or ""
     print(f"✅ Bot started as @{ME_USERNAME} (id={ME_ID}) | Flask on port {PORT}")

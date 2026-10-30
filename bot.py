@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+ #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
 🛡️ GROUP PROTECTOR BOT v2 (Telethon + Flask)
@@ -74,7 +74,7 @@ TAMIL_STRONG_WORDS = [
     "paitiyam", "paithyam", "bejara", "kudukara", "kuduthutu", "aaprom", "appuram",
     "solren", "sollren", "ketkala", "ketkate", "vendaam", "venam", "vennum",
     "thangachi", "thambi", "polappa", "romba", "konjam", "nallaa", "seri da",
-    "sari da", "paaru", "paru", "vanthuru", "enna panra", "enna panre", "tamil ahh",
+    "sari da", "paaru", "paru", "vanthuru", "enna panra", "enna panre", "tamil ahh", "Mood ah irukkura",
 ]
 TAMIL_WEAK_WORDS = [
     "enna", "illa", "ama", "seri", "sari", "nalla", "anna", "akka", "thala",

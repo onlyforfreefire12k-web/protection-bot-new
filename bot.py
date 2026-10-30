@@ -1,10 +1,15 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-🛡️ GROUP PROTECTOR BOT (Telethon + Flask)
-Deploy: Render Web Service -> Start Command: python bot.py  (gunicorn ki zaroorat NAHI)
-
-Run: python bot.py
+🛡️ GROUP PROTECTOR BOT v2 (Telethon + Flask)
+- Urdu/Arabic/Tamil/Telugu (script) + Roman Tamil/Telugu -> delete
+- Family abuse combo (dirty word + family word) -> delete
+- Adult bait (teen boy here, bull here, secret chat, koi ladki...) -> delete
+- Paid/scam promo -> auto gmute (English reason)
+- Bio/Name/Username scam words -> auto gmute
+- 3+ emoji, f2f, state+couple -> delete
+- /gunmute (admins only) | /start DM menu
+Deploy: Render Web Service -> Start Command: python bot.py
 """
 
 import html as html_mod
@@ -25,14 +30,22 @@ API_ID = int(os.environ.get("API_ID", "0") or 0)
 API_HASH = os.environ.get("API_HASH", "").strip()
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "").strip()
 PORT = int(os.environ.get("PORT", "10000"))
-OWNER_ID = int(os.environ.get("OWNER_ID", "0") or 0)      # optional: extra /gunmute authority
-LOG_CHANNEL = int(os.environ.get("LOG_CHANNEL", "0") or 0)  # optional: -100xxxx log channel
+OWNER_ID = int(os.environ.get("OWNER_ID", "0") or 0)
+LOG_CHANNEL = int(os.environ.get("LOG_CHANNEL", "0") or 0)
 
-EMOJI_LIMIT = 3          # 3 ya usse zyada emojis -> delete
-ARABIC_MIN_CHARS = 2     # urdu/arabic script kitne chars par delete
+EMOJI_LIMIT = 3
+ARABIC_MIN_CHARS = 2
 TAMIL_MIN_CHARS = 2
-BIO_RECHECK_DAYS = 7     # bio 7 din me ek baar dobara check
-NOTICE_COOLDOWN = 15     # group me notices ka spam control (seconds)
+TELUGU_MIN_CHARS = 2
+NOTICE_COOLDOWN = 15        # group me notice spam control (seconds)
+
+# 🆕 bio recheck timings
+BIO_RECHECK_HOURS = 6       # bio mil gaya tha -> 6 ghante me dobara
+BIO_EMPTY_RECHECK_MIN = 30  # bio khali tha -> 30 min me dobara (naya bio pakadne ke liye)
+BIO_FAIL_RECHECK_MIN = 10   # fetch fail hua -> 10 min me dobara
+
+# 🆕 agar chaho ki gmuted ADMIN ke messages bhi delete hon (self-test ke liye)
+DELETE_GMUTED_ADMINS = os.environ.get("DELETE_GMUTED_ADMINS", "0") == "1"
 
 DATA_DIR = "data"
 GMUTE_FILE = os.path.join(DATA_DIR, "gmute_list.json")
@@ -41,13 +54,13 @@ SESSION_PATH = os.path.join(DATA_DIR, "protector_session")
 
 os.makedirs(DATA_DIR, exist_ok=True)
 
-# ================== WORD LISTS (YAHIN EDIT KARO) ==================
-# Urdu aur Arabic dono Arabic-script use karte hain -> ek hi range se pakde jaate hain
+# ================== SCRIPT RANGES ==================
 ARABIC_RANGES = ((0x0600, 0x06FF), (0x0750, 0x077F), (0x08A0, 0x08FF),
                  (0xFB50, 0xFDFF), (0xFE70, 0xFEFF))
 TAMIL_RANGES = ((0x0B80, 0x0BFF),)
+TELUGU_RANGES = ((0x0C00, 0x0C7F),)   # 🆕 Telugu
 
-# Roman Tamil / Tanglish — 1 strong word ya 2 weak words -> delete
+# ================== ROMAN TAMIL ==================
 TAMIL_STRONG_WORDS = [
     "vanakkam", "vanakam", "epdi", "eppadi", "epadi", "machi", "machan", "machaan",
     "ennada", "enna da", "enna ve", "puriyala", "puriyale", "puriyathu", "mudinchu",
@@ -71,7 +84,18 @@ TAMIL_WEAK_WORDS = [
     "unakku", "enakku", "irukenga", "vanten", "poren", "sollu", "aachu", "pocha",
 ]
 
-# Instant GMUTE rules (message content) — (regex, chhota english reason)
+# 🆕 ROMAN TELUGU
+TELUGU_STRONG_WORDS = [
+    "dengudu", "dengava", "dengha", "denguta", "dengayya", "lanja", "lanjala",
+    "puku", "pukulo", "gudda", "guddha", "boothu", "buthu", "nakodu", "nakkodi",
+    "nuvvu", "nuvve", "endi", "enduku", "endukante", "ela unnav", "ela unnaru",
+    "ela vunnav", "ela vunnaru", "em chestunnav", "em chestunnaru", "cheppu",
+    "cheppava", "cheppu ra", "chudu", "chudu ra", "chusava", "orey", "orey",
+    "pichi", "pichhi", "pichodi", "ra ba", "ra babu", "entira", "bagunnava",
+    "bagunnara", "ela undi",
+]
+
+# ================== GMUTE RULES (message) ==================
 GMUTE_RULES = [
     (re.compile(r"\bc[o0]me\s+(?:[o0]n\s+)?b[o0]ys?\b"), "promo message (come boys)"),
     (re.compile(r"\bb[o0]ys?\s+(?:come|dm|inbox|join)\b|\b(?:come|join)\s+(?:b[o0]ys?|dears?)\b"), "promo message (boys come/dm)"),
@@ -94,33 +118,59 @@ GMUTE_RULES = [
     (re.compile(r"\bservice\s+dm\b|\bdm\s+for\s+service\b|\bservice\s+available\b"), "service dm promo"),
 ]
 
-# Bio strong rules — direct hit -> gmute
-BIO_STRONG_RULES = [
-    (re.compile(r"private\s+vide[o0]\s*call"), "scam bio (private video call)"),
-    (re.compile(r"vide[o0]\s*call\s+(?:service|available|paid)"), "scam bio (vc service)"),
-    (re.compile(r"\bvc\s+service\b"), "scam bio (vc service)"),
-    (re.compile(r"\btake\s+dem[o0]\b|\bmak[e3]\s+sur[e3]\s+th[e3]\s+s[e3]rvic[e3]\b"), "scam bio (take demo / make sure the service)"),
-    (re.compile(r"\bn[o0]\s+dem[o0]\b"), "scam bio (no demo)"),
-    (re.compile(r"\b(?:100\s*%?|100\s*percent)\s*real\b"), "scam bio (100% real)"),
-    (re.compile(r"\b(?:real|genuine)\s+meet\b|\bmeet\s+service\b|\bdoor\s+step\b"), "scam bio (real meet)"),
-    (re.compile(r"\bdm\s+me\s+now\b"), "scam bio (dm me now)"),
-    (re.compile(r"\bservice\s+dm\b|\bdm\s+for\s+service\b"), "scam bio (service dm)"),
-    (re.compile(r"\bpaid\s+(?:service|sh[o0]w|meet|vide[o0]\s*call)\b|\bpremium\s+service\b"), "scam bio (paid service)"),
-    (re.compile(r"\bfree\s+(?:sh[o0]w|vide[o0]\s*call|meet)\b"), "scam bio (free show)"),
-    (re.compile(r"child\s*[-._\s]*p[a@o0]r?n"), "banned content in bio"),
-    (re.compile(r"\bc[o0]me\s+b[o0]ys?\b"), "scam bio (come boys)"),
+# 🆕 ============ BIO/NAME SIMPLE WORD LIST ============
+# Bio/Name/Username me in me se KOI EK word bhi mila -> seedha gmute
+BIO_BAN_PATTERNS = [
+    ("free",      re.compile(r"\bfr[e3][e3]\b")),
+    ("dm",        re.compile(r"\bdms?\b")),
+    ("service",   re.compile(r"\bserv[i1]c[e3]s?\b")),
+    ("100%",      re.compile(r"1[o0]0\s*%|1[o0]0\s*percent")),
+    ("callgirl",  re.compile(r"\bcall\s*girls?\b|\bcallgirls?\b")),
+    ("real meet", re.compile(r"\bre[a@]l\s+m[e3][e3]t\b")),
+    ("provider",  re.compile(r"\bprov[i1]d[e3]r?s?\b")),
+    ("demo",      re.compile(r"\bd[e3]m[o0]s?\b")),
+    ("come",      re.compile(r"\bc[o0]m[e3]\b")),
 ]
 
-# Bio weak red-flag words — COMBO detection (BIO_WEAK_MIN ya zyada -> gmute)
-BIO_WEAK_WORDS = [
-    "video call", "vc", "dm me", "dm now", "100%", "100 percent", "real",
-    "authentic", "genuine", "service", "demo", "meet", "private", "paid",
-    "premium", "no advance", "full show", "come dm", "inbox me", "direct meet",
-    "home meet", "available 24", "24/7", "boys", "show", "booking", "original",
+# 🆕 ============ FAMILY ABUSE COMBO ============
+# (gandi/abuse word) + (family word) DONO match -> delete
+FAMILY_WORDS = [
+    "mummy", "mom", "mommy", "mother", "maa", "ma", "mama", "ammi", "amma",
+    "behen", "behn", "bhen", "sister", "sis", "didi",
+    "bhabhi", "bhabi", "wife", "biwi", "patni", "gharwali", "saali", "saala",
+    "beti", "beta", "daughter", "son", "bacha", "bachchi",
+    "chachi", "mausi", "mousi", "bua", "aunty", "aanti", "anti",
+    "nani", "nana", "dadi", "dada", "bhai", "bhaiya", "brother", "cousin",
+    "jija", "jeth", "devar", "nanad", "family",
 ]
-BIO_WEAK_MIN = 4
+DIRTY_PATTERNS = [
+    r"\bch[o0]d\w*", r"\bchud\w*", r"\bch[u1]t\w*", r"\bch[u1]ch[i1]\b",
+    r"\bg[a@][a@]?nd\w*", r"\bbh[o0]sd\w*", r"\bchutiy[a@]\w*",
+    r"\bfu?c?k\w*", r"\bsex\b|\bsexx+\b",
+    r"\b(?:sexy?|hot|dirt[iy])\s+(?:baat\w*|chat|talk|video|pic[sz]?|photo[sz]?|call|service)\b",
+    r"\bgand[iy]+\s+baat\w*",
+    r"\bra?p[e3]\w*",
+    r"\b(?:lund|la?w?d[a@]|l[o0]d[a@]|l[o0]d[e3])\b",
+    r"\b(?:raand|rand[i1])\b",
+    r"\bb[o0][o0]bs?\b",
+    r"\b(?:nud[e3]s?|nangi)\b",
+    r"\b(?:kamin[e3]|haram[i1]|haramzad[a@]|kut[i1]y[a@]|kutt[e3]|kutt[i1])\b",
+    r"\bpelu?nga\b|\bpel\s?diya\b|\bpel\s?denge\b",
+]
 
-# States + major cities (location + couple -> delete)
+# 🆕 ============ ADULT BAIT ============
+BAIT_DELETE_RULES = [
+    (re.compile(r"\bteens?\s+bo[iy]s?\b|\bteens?\s+girls?\b"), "adult bait (teen)"),
+    (re.compile(r"\bbulls?\s*(?:here|for|available|needed|wanted|cpl|couple|ready|cuckold)\b|\bcuckold\s+bulls?\b"), "adult bait (bull)"),
+    (re.compile(r"\bsec[r3][e3]c?ts?\s*cha?ts?\b|\bsecret\s*cha?ts?\b"), "adult bait (secret chat)"),
+]
+GIRL_BAIT_RE = re.compile(
+    r"\b(?:koi|any|koyi?)\s+(?:ladki|larki|girl|girls|aunty|bhabhi|lady|ladies|mausi)\b"
+    r"|\b(?:ladki|girls?)\s+(?:here|available|online)\b")
+SEXT_CONTEXT_RE = re.compile(
+    r"\b(?:secret\s*cha?t|cha?t\s+kare\w*|dm|inbox|msg|baat\s+kare\w*|available|online|here|join|karo|karlo|karegi|karenge|ban[ea]gi|ban[ea]nge|hongi|honge)\b")
+
+# ================== STATES + CITIES (location + couple) ==================
 INDIA_LOCATIONS = [
     "andhra pradesh", "arunachal pradesh", "assam", "bihar", "chhattisgarh", "goa",
     "gujarat", "haryana", "himachal pradesh", "jharkhand", "karnataka", "kerala",
@@ -143,12 +193,15 @@ LOCATION_RE = re.compile(r"(?<![a-z])(?:" + "|".join(re.escape(x) for x in _LOC_
 COUPLE_RE = re.compile(r"\bc(?:oupl|upl|opl|pl)[e3]s?\b|\bcpl[e3]s?\b")
 F2F_RE = re.compile(r"\bf\s*2\s*f\b|\bf\s*to\s*f\b")
 
-TAMIL_STRONG_RE = re.compile(
-    r"(?<![a-z])(?:" + "|".join(re.escape(w) for w in sorted(set(TAMIL_STRONG_WORDS), key=len, reverse=True)) + r")(?![a-z])")
-TAMIL_WEAK_RE = re.compile(
-    r"(?<![a-z])(?:" + "|".join(re.escape(w) for w in sorted(set(TAMIL_WEAK_WORDS), key=len, reverse=True)) + r")(?![a-z])")
-BIO_WEAK_RE = re.compile(
-    r"(?<![a-z0-9])(?:" + "|".join(re.escape(w) for w in sorted(set(BIO_WEAK_WORDS), key=len, reverse=True)) + r")(?![a-z0-9])")
+def _word_list_re(words):
+    return re.compile(
+        r"(?<![a-z])(?:" + "|".join(re.escape(w) for w in sorted(set(words), key=len, reverse=True)) + r")(?![a-z])")
+
+TAMIL_STRONG_RE = _word_list_re(TAMIL_STRONG_WORDS)
+TAMIL_WEAK_RE = _word_list_re(TAMIL_WEAK_WORDS)
+TELUGU_STRONG_RE = _word_list_re(TELUGU_STRONG_WORDS)
+FAMILY_RE = _word_list_re(FAMILY_WORDS)
+DIRTY_RE = re.compile("|".join(DIRTY_PATTERNS))
 
 EMOJI_RE = re.compile(
     "["
@@ -183,14 +236,14 @@ def save_json(path, data):
     except Exception as e:
         print("[save-err]", e)
 
-gmute_db = load_json(GMUTE_FILE, {})    # "uid" -> {"reason":..., "time":...}
-bio_checked = load_json(BIOCHECK_FILE, {})  # "uid" -> last check timestamp
+gmute_db = load_json(GMUTE_FILE, {})
+bio_checked = load_json(BIOCHECK_FILE, {})
 
 BIO_LOCK = threading.Lock()
 BIO_DIRTY = threading.Event()
 BIO_INFLIGHT = set()
-admin_cache = {}          # (chat_id, uid) -> (ts, bool)
-last_notice = {}          # chat_id -> ts
+admin_cache = {}
+last_notice = {}
 
 def is_gmuted(uid):
     return str(uid) in gmute_db
@@ -215,23 +268,20 @@ def dirty_saver():
 # ========================= CLIENT =========================
 client = TelegramClient(SESSION_PATH, API_ID, API_HASH,
                         connection_retries=None, retry_delay=3)
-
 ME_ID = 0
 ME_USERNAME = ""
 
 # ========================= HELPERS =========================
 def norm_text(text):
-    """𝗣𝗿𝗶𝘃𝗮𝘁𝗲 𝘃𝗶𝗱𝗲𝗼 𝗰𝗮𝗹𝗹 -> private video call  (koi bhi styled font plain ban jaata hai)"""
     if not text:
         return ""
-    t = unicodedata.normalize("NFKD", text)
+    t = unicodedata.normalize("NFKD", text)   # 𝗣𝗿𝗶𝘃𝗮𝘁𝗲 -> private (koi bhi font)
     t = "".join(c for c in t if not unicodedata.combining(c))
     t = t.replace("\u00a0", " ")
-    t = re.sub(r"[\u200b-\u200f\u2060-\u2064\ufeff\u00ad]", "", t)  # zero-width evasion
+    t = re.sub(r"[\u200b-\u200f\u2060-\u2064\ufeff\u00ad]", "", t)
     return t.lower()
 
 def deleet_text(t):
-    """p0rn / c0me / d0or type leet ko second pass me pakadne ke liye"""
     return t.translate(str.maketrans({"0": "o", "3": "e", "4": "a", "5": "s",
                                       "7": "t", "@": "a", "$": "s", "1": "i"}))
 
@@ -248,8 +298,8 @@ def script_count(text, ranges):
 def emoji_count(text):
     if not text:
         return 0
-    s = re.sub(r"[\U0001F3FB-\U0001F3FF\uFE0F\u200D\u20E3]", "", text)  # modifiers hatao
-    flags = len(re.findall(r"[\U0001F1E6-\U0001F1FF]{2}", s))           # flag = 1 emoji
+    s = re.sub(r"[\U0001F3FB-\U0001F3FF\uFE0F\u200D\u20E3]", "", text)
+    flags = len(re.findall(r"[\U0001F1E6-\U0001F1FF]{2}", s))
     s = re.sub(r"[\U0001F1E6-\U0001F1FF]{2}", "", s)
     return flags + len(EMOJI_RE.findall(s))
 
@@ -288,7 +338,7 @@ async def log_action(text):
         print("[log-err]", e)
 
 async def notify_gmute(chat_id, uid, name, reason):
-    """Chhota notice + english reason — spam control ke sath."""
+    """GMUTE notice — pure English."""
     now = time.time()
     if now - last_notice.get(chat_id, 0.0) < NOTICE_COOLDOWN:
         return
@@ -297,14 +347,14 @@ async def notify_gmute(chat_id, uid, name, reason):
     text = (f"🚫 <b>GLOBAL MUTE</b>\n"
             f"👤 User: {mention} (<code>{uid}</code>)\n"
             f"🧾 Reason: {html_mod.escape(str(reason))}\n"
-            f"🤐 Is user ke saare messages ab auto-delete honge.\n"
-            f"💡 Admin undo: reply <code>/gunmute</code>")
+            f"🤐 All messages from this user will now be auto-deleted.\n"
+            f"💡 Admins can undo: reply <code>/gunmute</code>")
     try:
         await client.send_message(chat_id, text, parse_mode="html", link_preview=False)
     except Exception as e:
         print("[notice-err]", e)
 
-# ========================= BIO SCANNER =========================
+# ========================= BIO / NAME SCANNER =========================
 async def fetch_bio(uid):
     try:
         ent = await client.get_entity(uid)
@@ -314,41 +364,64 @@ async def fetch_bio(uid):
         print(f"[bio-fetch-err {uid}] {type(e).__name__}")
         return None
 
-def bio_is_scam(bio):
-    t = norm_text(bio)
-    if not t:
-        return False, None
-    for rx, reason in BIO_STRONG_RULES:
-        if rx.search(t):
-            return True, reason
-    hits = len(BIO_WEAK_RE.findall(t))
-    if hits >= BIO_WEAK_MIN:  # word COMBINATION -> gmute
-        return True, f"scam bio pattern combo ({hits} red flags)"
-    return False, None
+def profile_text(user, bio):
+    """Name + Username + Bio — sab check hote hain."""
+    uname = getattr(user, "username", None) or ""
+    parts = [getattr(user, "first_name", "") or "",
+             getattr(user, "last_name", "") or "",
+             uname.replace("_", " ").replace("-", " "),
+             bio or ""]
+    return " ".join(p for p in parts if p)
 
-async def scan_bio(user, chat_id):
+def bio_is_scam(text):
+    if not text:
+        return None
+    t = norm_text(text)
+    t = re.sub(r"[_\-./|\\]+", " ", t)   # DM_FOR_SERVICE -> dm for service
+    t2 = deleet_text(t)
+    for word, rx in BIO_BAN_PATTERNS:
+        if rx.search(t) or rx.search(t2):
+            return f"scam bio/name detected ('{word}')"
+    return None
+
+async def scan_bio(user, chat_id, event=None):
     uid = getattr(user, "id", None)
     if uid is None or is_gmuted(uid):
         return
     key = str(uid)
     now = time.time()
     with BIO_LOCK:
-        last = bio_checked.get(key, 0)
-    if now - last < BIO_RECHECK_DAYS * 86400 or key in BIO_INFLIGHT:
+        rec = bio_checked.get(key)
+        if isinstance(rec, dict):
+            last, st = rec.get("t", 0), rec.get("s", "ok")
+        elif isinstance(rec, (int, float)):
+            last, st = float(rec), "ok"
+        else:
+            last, st = 0, ""
+    if last:
+        gap = {"ok": BIO_RECHECK_HOURS * 3600,
+               "empty": BIO_EMPTY_RECHECK_MIN * 60,
+               "fail": BIO_FAIL_RECHECK_MIN * 60}.get(st, BIO_RECHECK_HOURS * 3600)
+        if now - last < gap:
+            return
+    if key in BIO_INFLIGHT:
         return
     BIO_INFLIGHT.add(key)
     try:
         bio = await fetch_bio(uid)
+        st = "ok" if bio and bio.strip() else ("empty" if bio is not None else "fail")
         with BIO_LOCK:
-            bio_checked[key] = now
+            bio_checked[key] = {"t": now, "s": st}
             BIO_DIRTY.set()
-        if bio:
-            bad, why = bio_is_scam(bio)
-            if bad and not is_gmuted(uid):
-                add_gmute(uid, why)
-                name = getattr(user, "first_name", None) or "user"
-                await notify_gmute(chat_id, uid, name, why)
-                await log_action(f"🚫 <b>GMUTE (bio)</b> <code>{uid}</code> — {html_mod.escape(why)}")
+        why = bio_is_scam(profile_text(user, bio))
+        print(f"[bio-scan] uid={uid} state={st} bad={why}")
+        if why and not is_gmuted(uid):
+            add_gmute(uid, why)
+            name = getattr(user, "first_name", None) or "user"
+            await notify_gmute(chat_id, uid, name, why)
+            if event is not None:
+                await safe_delete(event)
+            await log_action(f"🚫 <b>GMUTE (bio/name)</b> <code>{uid}</code> — {html_mod.escape(why)}")
     except Exception as e:
         print("[bio-scan-err]", e)
     finally:
@@ -365,26 +438,34 @@ async def process_group_message(event):
     uid = sender.id
     if uid == ME_ID:
         return
-    if await is_group_admin(event.chat_id, uid):
-        return  # admins ko kuch nahi hoga
 
-    # 1) pehle se gmute hai -> silent delete
-    if is_gmuted(uid):
+    gmuted = is_gmuted(uid)
+    admin = await is_group_admin(event.chat_id, uid)
+
+    # pehle se gmute hai -> silent delete (admin immunity optional)
+    if gmuted:
+        if admin and not DELETE_GMUTED_ADMINS:
+            return
         await safe_delete(event)
         return
 
-    # 2) bio scan (har user ka, ek baar; 7 din me recheck)
-    client.loop.create_task(scan_bio(sender, event.chat_id))
+    # 🆕 FIX: bio/name scan SAB users ka — admins bhi (pehle admins skip ho rahe the)
+    client.loop.create_task(scan_bio(sender, event.chat_id, None if admin else event))
+
+    if admin:
+        return  # admin messages delete nahi hote (immunity)
 
     text = event.raw_text or ""
     if not text.strip():
         return
     t = norm_text(text)
     t2 = deleet_text(t)
+    def hit(rx):
+        return rx.search(t) or rx.search(t2)
 
-    # 3) instant GMUTE triggers (scam / paid promo / banned words)
+    # 1) instant GMUTE (scam / paid promo / banned words)
     for rx, reason in GMUTE_RULES:
-        if rx.search(t) or rx.search(t2):
+        if hit(rx):
             await safe_delete(event)
             if not is_gmuted(uid):
                 add_gmute(uid, reason)
@@ -394,37 +475,66 @@ async def process_group_message(event):
             print(f"[gmute] uid={uid} reason={reason}")
             return
 
-    # 4) Urdu / Arabic script
+    # 2) Urdu / Arabic
     if script_count(t, ARABIC_RANGES) >= ARABIC_MIN_CHARS:
         await safe_delete(event)
         print(f"[delete] urdu/arabic uid={uid}")
         return
 
-    # 5) Tamil script
+    # 3) Tamil script
     if script_count(t, TAMIL_RANGES) >= TAMIL_MIN_CHARS:
         await safe_delete(event)
-        print(f"[delete] tamil-script uid={uid}")
+        print(f"[delete] tamil uid={uid}")
         return
 
-    # 6) Roman Tamil (Tanglish): 1 strong ya 2 weak words
+    # 🆕 4) Telugu script
+    if script_count(t, TELUGU_RANGES) >= TELUGU_MIN_CHARS:
+        await safe_delete(event)
+        print(f"[delete] telugu uid={uid}")
+        return
+
+    # 5) Roman Tamil (Tanglish)
     if TAMIL_STRONG_RE.search(t) or len(TAMIL_WEAK_RE.findall(t)) >= 2:
         await safe_delete(event)
         print(f"[delete] roman-tamil uid={uid}")
         return
 
-    # 7) 3+ emojis combination
+    # 🆕 6) Roman Telugu
+    if TELUGU_STRONG_RE.search(t):
+        await safe_delete(event)
+        print(f"[delete] roman-telugu uid={uid}")
+        return
+
+    # 7) 3+ emojis
     if emoji_count(text) >= EMOJI_LIMIT:
         await safe_delete(event)
         print(f"[delete] 3+ emojis uid={uid}")
         return
 
     # 8) f2f
-    if F2F_RE.search(t):
+    if hit(F2F_RE):
         await safe_delete(event)
         print(f"[delete] f2f uid={uid}")
         return
 
-    # 9) State/City + couple
+    # 🆕 9) FAMILY ABUSE COMBO: (gandi baat/abuse) + (family member) dono match
+    if DIRTY_RE.search(t) and FAMILY_RE.search(t):
+        await safe_delete(event)
+        print(f"[delete] family-abuse uid={uid}")
+        return
+
+    # 🆕 10) ADULT BAIT: teen boy / bull / secret chat / koi ladki ...
+    for rx, reason in BAIT_DELETE_RULES:
+        if hit(rx):
+            await safe_delete(event)
+            print(f"[delete] {reason} uid={uid}")
+            return
+    if GIRL_BAIT_RE.search(t) and SEXT_CONTEXT_RE.search(t):
+        await safe_delete(event)
+        print(f"[delete] adult bait (girl/secret chat) uid={uid}")
+        return
+
+    # 11) State/City + couple
     if LOCATION_RE.search(t) and COUPLE_RE.search(t):
         await safe_delete(event)
         print(f"[delete] location+couple uid={uid}")
@@ -446,7 +556,7 @@ async def on_gunmute(event):
     if event.is_group:
         allowed = await is_group_admin(event.chat_id, event.sender_id)
         if not allowed:
-            await event.reply("⛔ Sirf group admins /gunmute use kar sakte hain.")
+            await event.reply("⛔ Only group admins can use /gunmute.")
             return
     else:
         if not (OWNER_ID and event.sender_id == OWNER_ID):
@@ -463,8 +573,8 @@ async def on_gunmute(event):
         except Exception:
             target_id = None
     if target_id is None:
-        await event.reply("ℹ️ Kisi user ke message ko REPLY karke <code>/gunmute</code> likho, "
-                          "ya <code>/gunmute &lt;user_id|@username&gt;</code>", parse_mode="html")
+        await event.reply("ℹ️ Reply to a user's message with <code>/gunmute</code>, "
+                          "or use <code>/gunmute &lt;user_id|@username&gt;</code>", parse_mode="html")
         return
     existed = remove_gmute(target_id)
     name = str(target_id)
@@ -475,34 +585,34 @@ async def on_gunmute(event):
         pass
     mention = f'<a href="tg://user?id={target_id}">{html_mod.escape(name)}</a>'
     if existed:
-        await event.reply(f"✅ {mention} ko <b>global mute list</b> se hata diya gaya. "
-                          f"Ab uske messages delete nahi honge.", parse_mode="html")
+        await event.reply(f"✅ {mention} has been removed from the global mute list. "
+                          f"Their messages will no longer be deleted.", parse_mode="html")
     else:
-        await event.reply(f"ℹ️ {mention} mute list me tha hi nahi — sab clean hai.", parse_mode="html")
+        await event.reply(f"ℹ️ {mention} was not in the mute list — all clean.", parse_mode="html")
 
-# ========================= DM /start UI =========================
+# ========================= DM /start UI (English) =========================
 START_TEXT = (
-    "🛡️ <b>GROUP PROTECTOR BOT</b> — Feature Menu\n\n"
+    "🛡️ <b>GROUP PROTECTOR BOT</b> — Features\n\n"
     "🧹 <b>AUTO-DELETE</b>\n"
-    "• Urdu / Arabic messages → 🗑️ instant delete\n"
-    "• Tamil (script) messages → 🗑️ instant delete\n"
-    "• Roman Tamil / Tanglish → 🗑️ instant delete\n"
-    "• State/City + <i>couple</i> promo → 🗑️ instant delete\n"
-    "• <code>f2f</code> messages → 🗑️ instant delete\n"
-    "• 3+ emojis ek message me → 🗑️ instant delete\n\n"
-    "🤐 <b>AUTO GLOBAL-MUTE (gmute list)</b>\n"
-    "• Scam / paid promo words: <i>come boys dm, free show, child porn, paid service, "
-    "video call service, dm me now…</i> → gmute + chhota English reason\n"
-    "• <b>Bio Scanner 🔎</b>: scam bio (<i>private video call, 100% real, take demo, no demo, "
-    "service dm, dm me now…</i> — kisi bhi styled font me) → user gmute list me → "
-    "uske saare messages auto-delete\n"
-    "• Word combination yaad rehta hai — bio copy-paste na bhi ho to bhi pakda jayega\n\n"
-    "♻️ Gmute list permanent — restart ke baad bhi active.\n\n"
+    "• Urdu / Arabic / Tamil / Telugu messages → deleted instantly\n"
+    "• Roman Tamil (Tanglish) & Roman Telugu → deleted\n"
+    "• State/City + <i>couple</i> promos → deleted\n"
+    "• <code>f2f</code> messages → deleted\n"
+    "• 3+ emojis in one message → deleted\n"
+    "• Family abuse (dirty talk + mother/sister/family names) → deleted\n"
+    "• Adult bait (<i>teen boy here, bull here, koi ladki secret chat karegi</i>) → deleted\n\n"
+    "🤐 <b>AUTO GLOBAL-MUTE</b>\n"
+    "• Scam promos: <i>come boys dm, free show, child porn, paid service, video call service…</i> "
+    "→ gmuted with a short English reason\n"
+    "• <b>Bio/Name Scanner 🔎</b>: words like <i>free, dm, service, 100%, callgirl, "
+    "real meet, provider, demo, come</i> in a user's bio/name → added to gmute list, "
+    "all their messages get auto-deleted (works with any styled font)\n\n"
+    "♻️ The gmute list is permanent — it survives restarts.\n\n"
     "⚙️ <b>COMMAND</b>\n"
-    "• <code>/gunmute</code> — user ke message ko reply karke mute list se remove (admin only)\n"
-    "• <code>/start</code> — ye menu (DM only)\n\n"
-    "📌 <b>Setup:</b> Bot ko group me <b>Admin</b> banayein (Delete Messages ON).\n"
-    "💬 Deletes silent hote hain, sirf gmute par chhota English reason aata hai."
+    "• <code>/gunmute</code> — reply to a user's message to remove them from the mute list (admins only)\n"
+    "• <code>/start</code> — this menu (DM only)\n\n"
+    "📌 <b>Setup:</b> Make the bot an <b>Admin</b> with <b>Delete Messages</b> permission.\n"
+    "💬 Deletes are silent — a short English reason is posted only when someone is gmuted."
 )
 
 @client.on(events.NewMessage(pattern=r"^/(start|help)(?:@\S+)?$", incoming=True))
@@ -522,13 +632,12 @@ async def on_close(event):
     except Exception:
         pass
 
-# ========================= GROUP INTRO / NEW MEMBERS =========================
+# ========================= GROUP INTRO (English) =========================
 GROUP_INTRO = (
     "🛡️ <b>Group Protector activated!</b>\n"
-    "⚠️ Mujhe <b>Admin</b> banao with <b>Delete Messages</b> permission, "
-    "warna delete/gmute kaam nahi karega.\n"
-    "✅ Urdu/Arabic/Tamil auto-delete • scam promo auto-gmute • bio scanner • "
-    "3+ emoji delete • f2f delete • state+couple delete\n"
+    "⚠️ Make me an <b>Admin</b> with <b>Delete Messages</b> permission, or I can't delete/gmute.\n"
+    "✅ Urdu/Arabic/Tamil/Telugu delete • scam promo auto-gmute • bio/name scanner • "
+    "family-abuse & adult-bait filter • 3+ emoji delete\n"
     "📩 Full menu: DM me <code>/start</code>"
 )
 
@@ -578,11 +687,10 @@ def main():
     global ME_ID, ME_USERNAME
     if not (API_ID and API_HASH and BOT_TOKEN):
         raise SystemExit("❌ API_ID, API_HASH, BOT_TOKEN env variables set karo!")
-    print(f"[debug] API_ID={API_ID} | API_HASH len={len(API_HASH)} | BOT_TOKEN len={len(BOT_TOKEN)}")
     threading.Thread(target=run_flask, daemon=True).start()
     threading.Thread(target=dirty_saver, daemon=True).start()
     client.start(bot_token=BOT_TOKEN)
-    me = client.loop.run_until_complete(client.get_me())   # <-- FIX: yahi se bot ka id/username milta hai
+    me = client.loop.run_until_complete(client.get_me())
     ME_ID = me.id
     ME_USERNAME = me.username or ""
     print(f"✅ Bot started as @{ME_USERNAME} (id={ME_ID}) | Flask on port {PORT}")
